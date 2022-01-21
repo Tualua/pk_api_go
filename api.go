@@ -21,41 +21,37 @@ type Config struct {
 	} `yaml:"server"`
 }
 
-//Structs for action=status
 type XmlLog struct {
-	XMLName xml.Name `xml:"log"`
-	Log     []zfs_go.ZfsEntity
+	XMLName xml.Name    `xml:"log"`
+	Entries interface{} `xml:"entry"`
 }
-type XmlStatus struct {
+
+type XmlResult struct {
 	XMLName xml.Name `xml:"response"`
 	Action  string   `xml:"action"`
 	Status  string   `xml:"status"`
-	Log     XmlLog
+	Fields  XmlFieldsMap
+	Log     XmlLog `xml:"log"`
 }
 
-type XmlResponse map[string]string
+type XmlFieldsMap map[string]string
 
-type xmlMapEntry struct {
+type xmlFieldEntry struct {
 	XMLName xml.Name
 	Value   string `xml:",chardata"`
 }
 
 //XML Encoder for map
-func (m XmlResponse) MarshalXML(e *xml.Encoder, start xml.StartElement) error {
+func (m XmlFieldsMap) MarshalXML(e *xml.Encoder, start xml.StartElement) error {
 	if len(m) == 0 {
 		return nil
 	}
-	start.Name.Local = "response"
-	err := e.EncodeToken(start)
-	if err != nil {
-		return err
-	}
 
 	for k, v := range m {
-		e.Encode(xmlMapEntry{XMLName: xml.Name{Local: k}, Value: v})
+		e.Encode(xmlFieldEntry{XMLName: xml.Name{Local: k}, Value: v})
 	}
 
-	return e.EncodeToken(start.End())
+	return nil
 }
 
 func NewConfig(configPath string) (*Config, error) {
@@ -76,7 +72,9 @@ func NewConfig(configPath string) (*Config, error) {
 func run(cfg *Config) {
 	router := mux.NewRouter().StrictSlash(true)
 	addrString := cfg.Server.Host + ":" + cfg.Server.Port
-	router.Path("/api").Queries("action", "snapshot").HandlerFunc(apiSnapshot)
+	router.Path("/api").Queries("action", "snapshot",
+		"snapsource", "{snapsource}",
+		"snapname", "{snapname}").HandlerFunc(apiSnapshot)
 	router.Path("/api").Queries("action", "bookmark").HandlerFunc(apiBookmark)
 	router.Path("/api").Queries("action", "clone").HandlerFunc(apiClone)
 	router.Path("/api").Queries("action", "destroy").HandlerFunc(apiDestroy)
@@ -117,11 +115,24 @@ func run(cfg *Config) {
 
 func apiSnapshot(w http.ResponseWriter, r *http.Request) {
 	var (
-		res      XmlStatus
-		err      error
-		snapshot string
+		res XmlResult
+		err error
+		out []string
 	)
+	res.Action = "snapshot"
+	res.Fields = make(XmlFieldsMap)
+	res.Fields["snapsource"] = mux.Vars(r)["snapsource"]
+	res.Fields["snapname"] = mux.Vars(r)["snapname"]
 
+	if out, err = zfs_go.ZfsCreateSnapshot(mux.Vars(r)["snapsource"], mux.Vars(r)["snapname"]); err != nil {
+		res.Status = "error"
+		res.Log = XmlLog{Entries: out}
+	}
+	fmt.Fprintf(w, xml.Header)
+	enc := xml.NewEncoder(w)
+	enc.Indent(" ", "  ")
+	enc.Encode(res)
+	fmt.Fprintf(w, "\n")
 }
 func apiBookmark(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "bookmark")
@@ -134,7 +145,7 @@ func apiDestroy(w http.ResponseWriter, r *http.Request) {
 }
 func apiStatus(w http.ResponseWriter, r *http.Request) {
 	var (
-		res      XmlStatus
+		res      XmlResult
 		err      error
 		datasets []zfs_go.ZfsEntity
 	)
@@ -143,7 +154,7 @@ func apiStatus(w http.ResponseWriter, r *http.Request) {
 		res.Status = "error"
 	} else {
 		res.Status = "success"
-		res.Log.Log = datasets
+		res.Log = XmlLog{Entries: datasets}
 	}
 
 	fmt.Fprintf(w, xml.Header)
@@ -226,30 +237,30 @@ func apiSmartClone2(w http.ResponseWriter, r *http.Request) {
 }
 func apiCheckClone(w http.ResponseWriter, r *http.Request) {
 	var (
-		res          XmlResponse
+		res          XmlResult
 		err          error
 		lastSnapshot string
 		snapshotInfo map[string]string
 	)
-	res = make(map[string]string)
-	res["action"] = "checkclone"
+	res.Fields = make(XmlFieldsMap)
+	res.Action = "checkclone"
 	if lastSnapshot, err = zfs_go.ZfsGetLastSnapshot(mux.Vars(r)["clonesource"]); err != nil {
-		res["status"] = "error"
-		res["errormessage"] = err.Error()
+		res.Status = "error"
+		res.Fields["errormessage"] = err.Error()
 	} else {
-		res["lastsnapshot"] = lastSnapshot
+		res.Fields["lastsnapshot"] = lastSnapshot
 	}
 	if snapshotInfo, err = zfs_go.ZfsGetSnapshotInfo(mux.Vars(r)["clonename"]); snapshotInfo["origin"] == "-" {
-		res["status"] = "error"
-		res["errormessage"] = fmt.Sprintf("%s is not clone.", res["clonename"])
+		res.Status = "error"
+		res.Fields["errormessage"] = fmt.Sprintf("%s is not clone.", mux.Vars(r)["clonename"])
 	} else {
 		if lastSnapshot == snapshotInfo["origin"] {
-			res["origin"] = snapshotInfo["origin"]
-			res["written"] = snapshotInfo["written"]
-			res["status"] = "error"
-			res["errormessage"] = "actual clone. nothing to do"
+			res.Fields["origin"] = snapshotInfo["origin"]
+			res.Fields["written"] = snapshotInfo["written"]
+			res.Status = "error"
+			res.Fields["errormessage"] = "actual clone. nothing to do"
 		} else {
-			res["status"] = "success"
+			res.Status = "success"
 		}
 	}
 

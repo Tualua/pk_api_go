@@ -79,20 +79,18 @@ func ZfsGetSnapshotInfo(dataset string) (map[string]string, error) {
 	return res, err
 }
 
-func ZfsCreateSnapshot(snapsource string, snapname string) (map[string]string, error) {
+func ZfsCreateSnapshot(snapsource string, snapname string) ([]string, error) {
 	var (
-		// out []byte
 		err error
-		res map[string]string
+		out []byte
+		res []string
 	)
-	res = make(map[string]string)
 	if snapsource != "" && snapname != "" {
 		cmd := exec.Command(ZFS_BINARY, "snapshot", snapsource+"@"+snapname)
-		if _, err = cmd.CombinedOutput(); err != nil {
+		if out, err = cmd.CombinedOutput(); err != nil {
 			log.Println(err)
+			res = strings.Split(string(out), "\n")
 		}
-
-		// res =
 
 	} else {
 		err = errors.New("missing snapshot source or snapshot name.")
