@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/xml"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
@@ -19,6 +20,10 @@ type Config struct {
 		Port string `yaml:"port"`
 		Host string `yaml:"host"`
 	} `yaml:"server"`
+	Apis struct {
+		ScstApi string `yaml:"scst_api"`
+		ZfsApi  string `yaml:"zfs_api"` //Not used yet
+	} `yaml:"apis"`
 }
 
 type XmlLog struct {
@@ -31,7 +36,7 @@ type XmlResult struct {
 	Action  string   `xml:"action"`
 	Status  string   `xml:"status"`
 	Fields  XmlFieldsMap
-	Log     XmlLog `xml:"log"`
+	Log     *XmlLog
 }
 
 type XmlFieldsMap map[string]string
@@ -69,6 +74,25 @@ func NewConfig(configPath string) (*Config, error) {
 	return config, nil
 }
 
+func ApiCall(api string, command string, param string) (string, error) {
+	var (
+		err          error
+		response     *http.Response
+		responseData []byte
+		res          string
+	)
+	if response, err = http.Get(api); err != nil {
+		fmt.Println(err.Error())
+	} else {
+		if responseData, err = ioutil.ReadAll(response.Body); err != nil {
+			fmt.Println(err.Error())
+		} else {
+			res = string(responseData)
+		}
+	}
+	return res, err
+}
+
 func run(cfg *Config) {
 	router := mux.NewRouter().StrictSlash(true)
 	addrString := cfg.Server.Host + ":" + cfg.Server.Port
@@ -95,7 +119,11 @@ func run(cfg *Config) {
 	router.Path("/api").Queries("action", "version").HandlerFunc(apiVersion)
 	router.Path("/api").Queries("action", "targetcreate").HandlerFunc(apiTargetCreate)
 	router.Path("/api").Queries("action", "diffcreate").HandlerFunc(apiDiffCreate)
-	router.Path("/api").Queries("action", "smartclone").HandlerFunc(apiSmartClone)
+	router.Path("/api").Queries("action", "smartclone",
+		"clonesource", "{clonesource}",
+		"clonename", "{clonename}",
+		"deviceid", "{deviceid}",
+	).HandlerFunc(apiSmartClone)
 	router.Path("/api").Queries("action", "lastsnapshot").HandlerFunc(apiLastSnapshot)
 	router.Path("/api").Queries("action", "startreceiving").HandlerFunc(apiStartReceiving)
 	router.Path("/api").Queries("action", "replicate").HandlerFunc(apiReplicate)
@@ -126,7 +154,9 @@ func apiSnapshot(w http.ResponseWriter, r *http.Request) {
 
 	if out, err = zfs_go.ZfsCreateSnapshot(mux.Vars(r)["snapsource"], mux.Vars(r)["snapname"]); err != nil {
 		res.Status = "error"
-		res.Log = XmlLog{Entries: out}
+		res.Log = &XmlLog{Entries: out}
+	} else {
+		res.Status = "success"
 	}
 	fmt.Fprintf(w, xml.Header)
 	enc := xml.NewEncoder(w)
@@ -154,7 +184,7 @@ func apiStatus(w http.ResponseWriter, r *http.Request) {
 		res.Status = "error"
 	} else {
 		res.Status = "success"
-		res.Log = XmlLog{Entries: datasets}
+		res.Log = &XmlLog{Entries: datasets}
 	}
 
 	fmt.Fprintf(w, xml.Header)
@@ -212,7 +242,43 @@ func apiDiffCreate(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "diffcreate")
 }
 func apiSmartClone(w http.ResponseWriter, r *http.Request) {
-	fmt.Fprintf(w, "smartclone")
+	var (
+		res          XmlResult
+		err          error
+		lastSnapshot string
+		snapshotInfo map[string]string
+	)
+	res.Action = "smartclone"
+	if lastSnapshot, err = zfs_go.ZfsGetLastSnapshot(mux.Vars(r)["clonesource"]); err != nil {
+		res.Status = "error"
+		res.Fields["errormessage"] = err.Error()
+	} else {
+		if lastSnapshot == "" {
+			res.Status = "error"
+			res.Fields["errormessage"] = fmt.Sprintf("there is no any snapshot in %s", mux.Vars(r)["clonesource"])
+		} else {
+			res.Fields["lastsnapshot"] = lastSnapshot
+			if snapshotInfo, err = zfs_go.ZfsGetSnapshotInfo(mux.Vars(r)["clonename"]); snapshotInfo["origin"] == "-" {
+				res.Status = "error"
+				res.Fields["errormessage"] = fmt.Sprintf("%s is not clone.", mux.Vars(r)["clonename"])
+			} else {
+				res.Fields["origin"] = snapshotInfo["origin"]
+				res.Fields["written"] = snapshotInfo["written"]
+				// $lun2 - WTF?
+
+				if snapshotInfo["origin"] != lastSnapshot || snapshotInfo["written"] != "0" {
+					// lun2 checking?
+
+				}
+			}
+		}
+	}
+	fmt.Fprintf(w, xml.Header)
+	enc := xml.NewEncoder(w)
+	enc.Indent(" ", "  ")
+	enc.Encode(res)
+	fmt.Fprintf(w, "\n")
+
 }
 func apiZfsList(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "zfslist")

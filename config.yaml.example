@@ -1,0 +1,6 @@
+server:
+  host: 0.0.0.0
+  port: 10000
+apis:
+  scst_api: "http://127.0.0.1:10001"
+  zfs_api: "http://127.0.0.1:10002" # Not used in current version

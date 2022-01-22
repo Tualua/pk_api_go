@@ -97,3 +97,22 @@ func ZfsCreateSnapshot(snapsource string, snapname string) ([]string, error) {
 	}
 	return res, err
 }
+
+func ZfsRollback(snapname string) ([]string, error) {
+	var (
+		err error
+		out []byte
+		res []string
+	)
+	if snapname != "" {
+		cmd := exec.Command(ZFS_BINARY, "rollback -r", snapname)
+		if out, err = cmd.CombinedOutput(); err != nil {
+			log.Println(err)
+			res = strings.Split(string(out), "\n")
+		}
+
+	} else {
+		err = errors.New("missing snapshot name.")
+	}
+	return res, err
+}
