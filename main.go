@@ -3,94 +3,18 @@ package main
 import (
 	"encoding/xml"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
 
-	"github.com/Tualua/pk_api_go/zfs_go"
-	"github.com/go-yaml/yaml"
+	"github.com/gorilla/handlers"
 	"github.com/gorilla/mux"
 )
 
 const tmpPath string = "/tmp"
 
-type Config struct {
-	Server struct {
-		Port string `yaml:"port"`
-		Host string `yaml:"host"`
-	} `yaml:"server"`
-	Apis struct {
-		ScstApi string `yaml:"scst_api"`
-		ZfsApi  string `yaml:"zfs_api"` //Not used yet
-	} `yaml:"apis"`
-}
-
-type XmlLog struct {
-	XMLName xml.Name    `xml:"log"`
-	Entries interface{} `xml:"entry"`
-}
-
-type XmlResult struct {
-	XMLName xml.Name `xml:"response"`
-	Action  string   `xml:"action"`
-	Status  string   `xml:"status"`
-	Fields  XmlFieldsMap
-	Log     *XmlLog
-}
-
-type XmlFieldsMap map[string]string
-
-type xmlFieldEntry struct {
-	XMLName xml.Name
-	Value   string `xml:",chardata"`
-}
-
-//XML Encoder for map
-func (m XmlFieldsMap) MarshalXML(e *xml.Encoder, start xml.StartElement) error {
-	if len(m) == 0 {
-		return nil
-	}
-
-	for k, v := range m {
-		e.Encode(xmlFieldEntry{XMLName: xml.Name{Local: k}, Value: v})
-	}
-
-	return nil
-}
-
-func NewConfig(configPath string) (*Config, error) {
-	config := &Config{}
-	file, err := os.Open(configPath)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-	d := yaml.NewDecoder(file)
-	if err := d.Decode(&config); err != nil {
-		return nil, err
-	}
-
-	return config, nil
-}
-
-func ApiCall(api string, command string, param string) (string, error) {
-	var (
-		err          error
-		response     *http.Response
-		responseData []byte
-		res          string
-	)
-	if response, err = http.Get(api); err != nil {
-		fmt.Println(err.Error())
-	} else {
-		if responseData, err = ioutil.ReadAll(response.Body); err != nil {
-			fmt.Println(err.Error())
-		} else {
-			res = string(responseData)
-		}
-	}
-	return res, err
+func loggingMiddleware(next http.Handler) http.Handler {
+	return handlers.CombinedLoggingHandler(os.Stdout, next)
 }
 
 func run(cfg *Config) {
@@ -98,11 +22,11 @@ func run(cfg *Config) {
 	addrString := cfg.Server.Host + ":" + cfg.Server.Port
 	router.Path("/api").Queries("action", "snapshot",
 		"snapsource", "{snapsource}",
-		"snapname", "{snapname}").HandlerFunc(apiSnapshot)
+		"snapname", "{snapname}").HandlerFunc(apiSnapshot(cfg.Apis.ZfsApi))
 	router.Path("/api").Queries("action", "bookmark").HandlerFunc(apiBookmark)
 	router.Path("/api").Queries("action", "clone").HandlerFunc(apiClone)
 	router.Path("/api").Queries("action", "destroy").HandlerFunc(apiDestroy)
-	router.Path("/api").Queries("action", "status").HandlerFunc(apiStatus)
+	router.Path("/api").Queries("action", "status").HandlerFunc(apiStatus(cfg.Apis.ZfsApi))
 	router.Path("/api").Queries("action", "ipcstats").HandlerFunc(apiIpcStats)
 	router.Path("/api").Queries("action", "targetmount").HandlerFunc(apiTargetMount)
 	router.Path("/api").Queries("action", "targetenable").HandlerFunc(apiTargetEnable)
@@ -135,34 +59,46 @@ func run(cfg *Config) {
 	router.Path("/api").Queries("action", "checkclone",
 		"clonesource", "{clonesource}",
 		"clonename", "{clonename}",
-	).HandlerFunc(apiCheckClone)
+	).HandlerFunc(apiCheckClone(cfg.Apis.ZfsApi))
 	router.Path("/api").Queries("action", "test").HandlerFunc(apiTest)
-
+	router.Use(loggingMiddleware)
 	log.Fatal(http.ListenAndServe(addrString, router))
 }
 
-func apiSnapshot(w http.ResponseWriter, r *http.Request) {
-	var (
-		res XmlResult
-		err error
-		out []string
-	)
-	res.Action = "snapshot"
-	res.Fields = make(XmlFieldsMap)
-	res.Fields["snapsource"] = mux.Vars(r)["snapsource"]
-	res.Fields["snapname"] = mux.Vars(r)["snapname"]
+func apiSnapshot(apiZfs string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var (
+			res XmlResponse
+			err error
+		)
+		res.SetAction("snapshot")
 
-	if out, err = zfs_go.ZfsCreateSnapshot(mux.Vars(r)["snapsource"], mux.Vars(r)["snapname"]); err != nil {
-		res.Status = "error"
-		res.Log = &XmlLog{Entries: out}
-	} else {
-		res.Status = "success"
+		if mux.Vars(r)["snapsource"] == "" {
+			res.SetVal("snapsource", "null")
+		} else {
+			res.SetVal("snapsource", mux.Vars(r)["snapsource"])
+		}
+		if mux.Vars(r)["snapname"] == "" {
+			res.SetVal("snapname", "null")
+		} else {
+			res.SetVal("snapname", mux.Vars(r)["snapname"])
+		}
+
+		if res.Fields["snapname"] == "null" || res.Fields["snapsource"] == "null" {
+			res.Error("missing snapshot source or snapshot name.")
+		} else {
+			if err = ZfsCreateSnapshot(apiZfs, mux.Vars(r)["snapsource"], mux.Vars(r)["snapname"]); err != nil {
+				res.Error("log file not empty.")
+				Log := make([]string, 0)
+				Log = append(Log, err.Error())
+				res.Log = &XmlData{Entries: Log}
+			} else {
+				res.Success()
+			}
+		}
+
+		res.Write(&w)
 	}
-	fmt.Fprintf(w, xml.Header)
-	enc := xml.NewEncoder(w)
-	enc.Indent(" ", "  ")
-	enc.Encode(res)
-	fmt.Fprintf(w, "\n")
 }
 func apiBookmark(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "bookmark")
@@ -173,25 +109,27 @@ func apiClone(w http.ResponseWriter, r *http.Request) {
 func apiDestroy(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "destroy")
 }
-func apiStatus(w http.ResponseWriter, r *http.Request) {
-	var (
-		res      XmlResult
-		err      error
-		datasets []zfs_go.ZfsEntity
-	)
-	res.Action = "status"
-	if datasets, err = zfs_go.ZfsListAll(); err != nil {
-		res.Status = "error"
-	} else {
-		res.Status = "success"
-		res.Log = &XmlLog{Entries: datasets}
-	}
+func apiStatus(apiZfs string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var (
+			res_in  []ZfsEntity
+			res_out XmlResponse
+			err     error
+		)
+		res_out.Action = "status"
+		if res_in, err = ZfsListAll(apiZfs); err != nil {
+			res_out.Error(err.Error())
+		} else {
+			res_out.Status = "success"
+			res_out.Log = &XmlData{Entries: res_in}
+		}
+		fmt.Fprintf(w, xml.Header)
+		enc := xml.NewEncoder(w)
+		enc.Indent(" ", "  ")
+		enc.Encode(res_out)
+		fmt.Fprintf(w, "\n")
 
-	fmt.Fprintf(w, xml.Header)
-	enc := xml.NewEncoder(w)
-	enc.Indent(" ", "  ")
-	enc.Encode(res)
-	fmt.Fprintf(w, "\n")
+	}
 }
 func apiIpcStats(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "ipcstats")
@@ -242,14 +180,14 @@ func apiDiffCreate(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "diffcreate")
 }
 func apiSmartClone(w http.ResponseWriter, r *http.Request) {
-	var (
-		res          XmlResult
+	/*var (
+		res          XmlResponse
 		err          error
 		lastSnapshot string
 		snapshotInfo map[string]string
 	)
 	res.Action = "smartclone"
-	if lastSnapshot, err = zfs_go.ZfsGetLastSnapshot(mux.Vars(r)["clonesource"]); err != nil {
+	if lastSnapshot, err = ZfsGetLastSnapshot(mux.Vars(r)["clonesource"]); err != nil {
 		res.Status = "error"
 		res.Fields["errormessage"] = err.Error()
 	} else {
@@ -258,7 +196,7 @@ func apiSmartClone(w http.ResponseWriter, r *http.Request) {
 			res.Fields["errormessage"] = fmt.Sprintf("there is no any snapshot in %s", mux.Vars(r)["clonesource"])
 		} else {
 			res.Fields["lastsnapshot"] = lastSnapshot
-			if snapshotInfo, err = zfs_go.ZfsGetSnapshotInfo(mux.Vars(r)["clonename"]); snapshotInfo["origin"] == "-" {
+			if snapshotInfo, err = ZfsGetSnapshotInfo(mux.Vars(r)["clonename"]); snapshotInfo["origin"] == "-" {
 				res.Status = "error"
 				res.Fields["errormessage"] = fmt.Sprintf("%s is not clone.", mux.Vars(r)["clonename"])
 			} else {
@@ -277,7 +215,7 @@ func apiSmartClone(w http.ResponseWriter, r *http.Request) {
 	enc := xml.NewEncoder(w)
 	enc.Indent(" ", "  ")
 	enc.Encode(res)
-	fmt.Fprintf(w, "\n")
+	fmt.Fprintf(w, "\n")*/
 
 }
 func apiZfsList(w http.ResponseWriter, r *http.Request) {
@@ -301,22 +239,40 @@ func apiReplicate(w http.ResponseWriter, r *http.Request) {
 func apiSmartClone2(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "smartclone2")
 }
-func apiCheckClone(w http.ResponseWriter, r *http.Request) {
-	var (
-		res          XmlResult
+func apiCheckClone(apiZfs string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var (
+			lastSnapshot string
+			res          XmlResponseGeneric
+			err          error
+			cloneinfo    map[string]string = make(map[string]string)
+		)
+		res.SetAction("checkclone")
+		if lastSnapshot, err = ZfsGetLastSnapshot(apiZfs, mux.Vars(r)["clonesource"]); err != nil {
+			res.Error(err.Error())
+		} else {
+			res.SetVal("lastsnapshot", lastSnapshot)
+			if cloneinfo, err = ZfsGetCloneInfo(apiZfs, mux.Vars(r)["clonename"]); err != nil {
+				res.Error(err.Error())
+				log.Println(cloneinfo)
+			}
+			res.Write(&w)
+		}
+	}
+	/*var (
+		res          XmlResponseGeneric
 		err          error
 		lastSnapshot string
 		snapshotInfo map[string]string
 	)
-	res.Fields = make(XmlFieldsMap)
-	res.Action = "checkclone"
-	if lastSnapshot, err = zfs_go.ZfsGetLastSnapshot(mux.Vars(r)["clonesource"]); err != nil {
+	res.SetAction("checkclone")
+	if lastSnapshot, err = ZfsGetLastSnapshot(mux.Vars(r)["clonesource"]); err != nil {
 		res.Status = "error"
 		res.Fields["errormessage"] = err.Error()
 	} else {
 		res.Fields["lastsnapshot"] = lastSnapshot
 	}
-	if snapshotInfo, err = zfs_go.ZfsGetSnapshotInfo(mux.Vars(r)["clonename"]); snapshotInfo["origin"] == "-" {
+	if snapshotInfo, err = ZfsGetSnapshotInfo(mux.Vars(r)["clonename"]); snapshotInfo["origin"] == "-" {
 		res.Status = "error"
 		res.Fields["errormessage"] = fmt.Sprintf("%s is not clone.", mux.Vars(r)["clonename"])
 	} else {
@@ -328,13 +284,7 @@ func apiCheckClone(w http.ResponseWriter, r *http.Request) {
 		} else {
 			res.Status = "success"
 		}
-	}
-
-	fmt.Fprintf(w, xml.Header)
-	enc := xml.NewEncoder(w)
-	enc.Indent(" ", "  ")
-	enc.Encode(res)
-	fmt.Fprintf(w, "\n")
+	}*/
 }
 func apiTest(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "test")
