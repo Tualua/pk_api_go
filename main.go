@@ -254,38 +254,24 @@ func apiCheckClone(apiZfs string) http.HandlerFunc {
 			res.SetVal("lastsnapshot", lastSnapshot)
 			if cloneinfo, err = ZfsGetCloneInfo(apiZfs, mux.Vars(r)["clonename"]); err != nil {
 				res.Error(err.Error())
-				log.Println(cloneinfo)
+			} else {
+				if cloneinfo["origin"] == "" {
+					res.Error(fmt.Sprintf("%s is not clone.", mux.Vars(r)["clonename"]))
+				} else {
+					if lastSnapshot == cloneinfo["origin"] {
+						res.SetVal("origin", cloneinfo["origin"])
+						res.SetVal("written", cloneinfo["written"])
+						res.Error("actual clone. nothing to do")
+					} else {
+						res.Success()
+					}
+				}
 			}
 			res.Write(&w)
 		}
 	}
-	/*var (
-		res          XmlResponseGeneric
-		err          error
-		lastSnapshot string
-		snapshotInfo map[string]string
-	)
-	res.SetAction("checkclone")
-	if lastSnapshot, err = ZfsGetLastSnapshot(mux.Vars(r)["clonesource"]); err != nil {
-		res.Status = "error"
-		res.Fields["errormessage"] = err.Error()
-	} else {
-		res.Fields["lastsnapshot"] = lastSnapshot
-	}
-	if snapshotInfo, err = ZfsGetSnapshotInfo(mux.Vars(r)["clonename"]); snapshotInfo["origin"] == "-" {
-		res.Status = "error"
-		res.Fields["errormessage"] = fmt.Sprintf("%s is not clone.", mux.Vars(r)["clonename"])
-	} else {
-		if lastSnapshot == snapshotInfo["origin"] {
-			res.Fields["origin"] = snapshotInfo["origin"]
-			res.Fields["written"] = snapshotInfo["written"]
-			res.Status = "error"
-			res.Fields["errormessage"] = "actual clone. nothing to do"
-		} else {
-			res.Status = "success"
-		}
-	}*/
 }
+
 func apiTest(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "test")
 }

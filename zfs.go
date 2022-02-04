@@ -100,18 +100,16 @@ func ZfsGetCloneInfo(apiZfs string, dataset string) (map[string]string, error) {
 	var (
 		apiResponse []byte
 		err         error
-		//cloneInfo   map[string]interface{} // = make(map[string]interface{})
-		param    map[string]string = make(map[string]string)
-		jsonData jsonResponseGeneric
-		res      map[string]string
+		param       map[string]string = make(map[string]string)
+		jsonData    jsonResponseGeneric
+		res         map[string]string = make(map[string]string)
 	)
 	param["dataset"] = dataset
 	if apiResponse, err = apiCall(apiZfs, "cloneinfo", param); err != nil {
 		log.Println(err.Error())
 	} else {
 		json.Unmarshal(apiResponse, &jsonData)
-		//cloneInfo := jsonData.Data["cloneinfo"]
-		//res["written"] = out_split[1]
+		res = jsonData.GetData()
 	}
 	/*var (
 		out []byte
