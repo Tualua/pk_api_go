@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 )
 
@@ -42,6 +43,23 @@ func (j *jsonResponseGeneric) SetVal(key string, val interface{}) {
 		j.Data = make(map[string]interface{})
 	}
 	j.Data[key] = val
+}
+
+func (j *jsonResponseGeneric) GetData() map[string]string {
+	var (
+		res map[string]string = make(map[string]string)
+	)
+
+	for k, v := range j.Data {
+		res[k] = fmt.Sprintf("%v", v)
+	}
+
+	return res
+}
+
+func (j *jsonResponseGeneric) GetVal(key string) (res string) {
+	res = fmt.Sprintf("%v", j.Data[key])
+	return
 }
 
 func (j *jsonResponseGeneric) Write(w *http.ResponseWriter) {
