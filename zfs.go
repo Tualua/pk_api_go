@@ -9,8 +9,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
-	"os/exec"
-	"strings"
+	"strconv"
 )
 
 const ZFS_BINARY string = "/sbin/zfs"
@@ -35,14 +34,10 @@ func apiCall(api string, command string, param map[string]string) ([]byte, error
 	u, _ := url.Parse(api)
 	q := u.Query()
 	q.Set("action", command)
-	if param != nil {
-
-		for k := range param {
-			q.Set(k, param[k])
-		}
+	for k := range param {
+		q.Set(k, param[k])
 	}
 	u.RawQuery = q.Encode()
-	// u.Path = path.Join(u.Path, command)
 	apiUrl := u.String()
 	if response, err = http.Get(apiUrl); err != nil {
 		res = []byte(err.Error())
@@ -96,13 +91,13 @@ func ZfsGetLastSnapshot(apiZfs string, dataset string) (string, error) {
 	return res, err
 }
 
-func ZfsGetCloneInfo(apiZfs string, dataset string) (map[string]string, error) {
+func ZfsGetCloneInfo(apiZfs string, dataset string) (res map[string]string, err error) {
 	var (
 		apiResponse []byte
-		err         error
-		param       map[string]string = make(map[string]string)
-		jsonData    jsonResponseGeneric
-		res         map[string]string = make(map[string]string)
+		// err         error
+		param    map[string]string = make(map[string]string)
+		jsonData jsonResponseGeneric
+		// res         map[string]string = make(map[string]string)
 	)
 	param["dataset"] = dataset
 	if apiResponse, err = apiCall(apiZfs, "cloneinfo", param); err != nil {
@@ -111,20 +106,7 @@ func ZfsGetCloneInfo(apiZfs string, dataset string) (map[string]string, error) {
 		json.Unmarshal(apiResponse, &jsonData)
 		res = jsonData.GetData()
 	}
-	/*var (
-		out []byte
-		err error
-		res map[string]string
-	)
-
-	cmd := exec.Command(ZFS_BINARY, "get", "-Hpo", "value", "origin,written", dataset)
-	if out, err = cmd.CombinedOutput(); err != nil {
-		log.Println(err)
-	}
-	out_split := strings.Split(string(out), "\n")
-	res["origin"] = out_split[0]
-	res["written"] = out_split[1]*/
-	return res, err
+	return
 }
 
 func ZfsCreateSnapshot(apiZfs string, snapsource string, snapname string) error {
@@ -149,21 +131,83 @@ func ZfsCreateSnapshot(apiZfs string, snapsource string, snapname string) error 
 	return err
 }
 
-func ZfsRollback(snapname string) ([]string, error) {
+func ZfsRollback(apiZfs string, snapshot string) (err error) {
 	var (
-		err error
-		out []byte
-		res []string
+		apiResponse []byte
+		param       map[string]string = make(map[string]string)
+		jsonData    jsonResponseGeneric
 	)
-	if snapname != "" {
-		cmd := exec.Command(ZFS_BINARY, "rollback -r", snapname)
-		if out, err = cmd.CombinedOutput(); err != nil {
-			log.Println(err)
-			res = strings.Split(string(out), "\n")
+	if snapshot != "" {
+		param["snapshot"] = snapshot
+		if apiResponse, err = apiCall(apiZfs, "rollback", param); err != nil {
+			log.Println(err.Error())
+		} else {
+			json.Unmarshal(apiResponse, &jsonData)
+			if jsonData.Status == "error" {
+				err = errors.New(jsonData.ErrorMessage)
+			}
 		}
-
 	} else {
-		err = errors.New("missing snapshot name.")
+		err = errors.New("missing snapshot name")
 	}
-	return res, err
+	return
+}
+
+func ZfsDestroy(apiZfs string, dataset string) (err error) {
+	var (
+		apiResponse []byte
+		jsonData    jsonResponseGeneric
+		param       map[string]string = make(map[string]string)
+	)
+	param["dataset"] = dataset
+	if apiResponse, err = apiCall(apiZfs, "destroy", param); err != nil {
+		log.Println(err.Error())
+	} else {
+		json.Unmarshal(apiResponse, &jsonData)
+		if jsonData.Status == "error" {
+			err = errors.New(jsonData.ErrorMessage)
+		}
+	}
+	return
+}
+
+func ZfsCloneLast(apiZfs string, dataset string, origin string) (err error) {
+	var (
+		apiResponse []byte
+		jsonData    jsonResponseGeneric
+		param       map[string]string = make(map[string]string)
+	)
+	param["dataset"] = dataset
+	param["origin"] = origin
+	if apiResponse, err = apiCall(apiZfs, "clonelast", param); err != nil {
+		log.Println(err.Error())
+	} else {
+		json.Unmarshal(apiResponse, &jsonData)
+		if jsonData.Status == "error" {
+			err = errors.New(jsonData.ErrorMessage)
+		}
+	}
+	return
+}
+
+func ZfsCheckDatasetExists(apiZfs string, dataset string) (res bool, err error) {
+	var (
+		apiResponse []byte
+		jsonData    jsonResponseGeneric
+		param       map[string]string = make(map[string]string)
+	)
+	param["dataset"] = dataset
+	if apiResponse, err = apiCall(apiZfs, "checkds", param); err != nil {
+		log.Println(err.Error())
+	} else {
+		json.Unmarshal(apiResponse, &jsonData)
+		if jsonData.Status == "error" {
+			err = errors.New(jsonData.ErrorMessage)
+		} else {
+			if res, err = strconv.ParseBool(jsonData.GetData()["exists"]); err != nil {
+				log.Println(err.Error())
+			}
+		}
+	}
+	return
 }
