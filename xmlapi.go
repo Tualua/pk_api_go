@@ -58,6 +58,24 @@ type XmlResponseGeneric struct {
 	Fields  XmlFieldsMap
 }
 
+type XmlResponseSC2 struct {
+	XmlResponseGeneric
+	DesktopDeviceId      string `xml:"deviceid"`
+	DesktopTarget        string `xml:"target"`
+	DesktopFile          string `xml:"file"`
+	DesktopLastSnapshot  string `xml:"lastsnapshot"`
+	DesktopOrigin        string `xml:"origin"`
+	DesktopWritten       string `xml:"written"`
+	DesktopCloneSnapshot string `xml:"clonesnapshot"`
+	GamesDeviceId        string `xml:"deviceid"`
+	GamesTarget          string `xml:"target"`
+	GamesFile            string `xml:"file"`
+	GamesLastSnapshot    string `xml:"lastsnapshot"`
+	GamesOrigin          string `xml:"origin"`
+	GamesWritten         string `xml:"written"`
+	GamesCloneSnapshot   string `xml:"clonesnapshot"`
+}
+
 type ZfsXmlResponseListAll struct {
 	XmlResponseGeneric
 	Data []ZfsEntity `xml:"zfsentity"`
